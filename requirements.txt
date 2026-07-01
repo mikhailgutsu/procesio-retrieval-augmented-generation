@@ -1,2 +1,32 @@
-# Dependinte de runtime — adauga pachetele aici, apoi:
-#   pip install -r requirements.txt
+# PDF parsing, page-level text extraction and highlighting
+PyMuPDF>=1.24,<2.0
+
+ocrmypdf>=16.0,<17.0
+
+# Embeddings (multilingual). Pulls in torch/transformers.
+sentence-transformers>=3.0,<6.0
+
+# PostgreSQL driver (v3) + connection pool, and the pgvector adapter
+psycopg[binary,pool]>=3.2,<4.0
+pgvector>=0.3.6,<0.5
+
+# LLM answer extraction
+anthropic>=0.69,<1.0
+
+# Config from environment / .env
+pydantic>=2.7,<3.0
+pydantic-settings>=2.3,<3.0
+
+# API layer
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+# required by FastAPI for file uploads
+python-multipart>=0.0.9   
+
+# Utilities
+numpy>=1.26
+
+# ── TTest ──
+pytest>=8.0,<9.0
+# FastAPI TestClient dependency
+httpx>=0.27            

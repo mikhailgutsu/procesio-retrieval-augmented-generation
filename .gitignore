@@ -14,3 +14,15 @@ __pycache__/
 .idea/
 
 .DS_Store
+
+data/raw/*
+data/processed/*
+data/highlights/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/highlights/.gitkeep
+
+# Local model cache
+.cache/
+
+iged/
