@@ -20,6 +20,16 @@ from ..logging_config import get_logger
 
 log = get_logger(__name__)
 
+# Image inputs are OCR'd like scanned PDFs. A PDF is text-first; anything below is
+# an image that gets embedded into a 1-page PDF and then OCR'd.
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
+SUPPORTED_SUFFIXES = {".pdf"} | IMAGE_SUFFIXES
+
+
+def is_supported_file(path: str | Path) -> bool:
+    """True for PDFs and supported image types (case-insensitive)."""
+    return Path(path).suffix.lower() in SUPPORTED_SUFFIXES
+
 
 @dataclass
 class ScanDetection:
@@ -122,31 +132,57 @@ def run_ocr(src: Path, out: Path, languages: str) -> Path:
     return out
 
 
-def ensure_text_pdf(pdf_path: str | Path, settings: Settings | None = None) -> tuple[Path, bool]:
-    """Return a (text_bearing_pdf_path, was_ocred) pair.
+def image_to_pdf(image_path: str | Path, settings: Settings | None = None) -> Path:
+    """Embed an image into a single-page PDF (no text layer) in ``data/processed/``.
 
-    Born-digital PDFs are returned unchanged; scanned PDFs are OCR'd into
-    ``data/processed/<stem>.ocr.pdf``.
+    The result has no extractable text, so the normal scanned-detection path will
+    route it through OCR — no special-casing needed downstream.
     """
     settings = settings or get_settings()
-    pdf_path = Path(pdf_path)
-    pages = extract_pages_text(pdf_path)
+    settings.processed_dir.mkdir(parents=True, exist_ok=True)
+    image_path = Path(image_path)
+    out = settings.processed_dir / f"{image_path.stem}.image.pdf"
+    with fitz.open(image_path) as img:
+        pdf_bytes = img.convert_to_pdf()
+    with fitz.open("pdf", pdf_bytes) as pdf:
+        pdf.save(out)
+    log.info("Converted image %s → %s", image_path.name, out.name)
+    return out
+
+
+def ensure_text_pdf(input_path: str | Path, settings: Settings | None = None) -> tuple[Path, bool]:
+    """Return a (text_bearing_pdf_path, was_ocred) pair.
+
+    * Born-digital PDFs are returned unchanged.
+    * Scanned PDFs and image inputs (png/jpg/tiff/…) are OCR'd into
+      ``data/processed/<stem>.ocr.pdf``.
+    """
+    settings = settings or get_settings()
+    input_path = Path(input_path)
+
+    # An image is embedded into a PDF first; that PDF has no text → detected as scanned.
+    if input_path.suffix.lower() in IMAGE_SUFFIXES:
+        source_pdf = image_to_pdf(input_path, settings)
+    else:
+        source_pdf = input_path
+
+    pages = extract_pages_text(source_pdf)
     detection = detect_scanned(
         pages, settings.scanned_char_threshold, settings.scanned_page_ratio
     )
     log.info(
         "Scan check: %s — %d pages, %d empty (%.0f%%) → %s",
-        pdf_path.name,
+        input_path.name,
         detection.num_pages,
         detection.empty_pages,
         detection.empty_ratio * 100,
-        "SCANNED" if detection.is_scanned else "text",
+        "SCANNED/OCR" if detection.is_scanned else "text",
     )
     if not detection.is_scanned:
-        return pdf_path, False
+        return source_pdf, False
 
-    out = settings.processed_dir / f"{pdf_path.stem}.ocr.pdf"
-    run_ocr(pdf_path, out, settings.ocr_languages)
+    out = settings.processed_dir / f"{input_path.stem}.ocr.pdf"
+    run_ocr(source_pdf, out, settings.ocr_languages)
     return out, True
 
 

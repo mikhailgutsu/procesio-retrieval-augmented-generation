@@ -87,6 +87,24 @@ def blank_pdf(tmp_path: Path) -> Path:
     return make_pdf(tmp_path / "scanned.pdf", ["", "", ""])
 
 
+def make_text_png(path: Path, text: str) -> Path:
+    """Render ASCII text to a PNG image (a stand-in for a scanned page)."""
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_textbox(fitz.Rect(30, 30, 560, 400), text, fontsize=22, fontname="helv")
+    page.get_pixmap(matrix=fitz.Matrix(2, 2)).save(path)
+    doc.close()
+    return path
+
+
+@pytest.fixture(scope="session")
+def require_ocr() -> None:
+    import shutil
+
+    if shutil.which("tesseract") is None or shutil.which("gs") is None:
+        pytest.skip("OCR toolchain (tesseract + ghostscript) not available")
+
+
 # ── Database fixture (integration) ───────────────────────────────────────────
 @pytest.fixture(scope="session")
 def require_db() -> Settings:

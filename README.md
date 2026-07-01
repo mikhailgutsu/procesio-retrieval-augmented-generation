@@ -109,11 +109,15 @@ The `chunks.embedding` vector dimension is written from `EMBEDDING_DIM`.
 # Generate a demo PDF (technical Romanian) to try things out
 .venv/bin/python scripts/make_sample_pdf.py
 
-# Ingest every PDF in data/raw/
+# Ingest every PDF/image in data/raw/
 make ingest                              # == python -m src.cli ingest
 # …or a single file
 .venv/bin/python -m src.cli ingest --path data/raw/statie_110kV_instructiuni.pdf
 ```
+
+Supported inputs: **PDF** and **images** (`.png/.jpg/.jpeg/.tif/.tiff/.bmp/.webp`).
+Images and scanned PDFs are OCR'd automatically into a text-layer PDF (requires
+Tesseract + Ghostscript). Unsupported types in `data/raw/` are skipped silently.
 
 The first ingest downloads the embedding model (~1 GB for `multilingual-e5-base`).
 Re-ingesting the same file is a no-op (deduped by content hash;
@@ -142,7 +146,7 @@ make api                                 # uvicorn api.main:app on :8000
 ```
 
 - `GET  /health` — liveness + DB connectivity + document/chunk counts
-- `POST /ingest` — multipart file upload, **or** JSON/form `path` to a server-side PDF
+- `POST /ingest` — multipart file upload (PDF or image), **or** JSON/form `path` to a server-side file
 - `POST /ask` — `{"question": "...", "k": 5, "highlight": true}` → answer + citations + highlights
 
 ```bash
@@ -254,5 +258,9 @@ docker compose --profile app up --build
 - The LLM is instructed to return **verbatim** spans; highlighting locates them on
   the page with `page.search_for`. Multi-line spans may not always match in the PDF
   (the UI character offsets still resolve) — this is best-effort by design.
-- OCR requires Tesseract + Ghostscript on the host (or use the app container).
+- Inputs: PDF and single-page images (png/jpg/jpeg/tiff/bmp/webp). Each image
+  becomes one 1-page document, OCR'd like a scanned PDF.
+- OCR requires Tesseract (with the `OCR_LANGUAGES` packs, e.g. `ron`) + Ghostscript
+  on the host (or use the app container). A missing language pack fails that file
+  with a clear error and continues with the rest.
 - No authentication on the API — this is a PoC; add auth before any real deployment.

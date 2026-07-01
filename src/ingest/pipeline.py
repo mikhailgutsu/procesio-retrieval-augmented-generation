@@ -26,7 +26,13 @@ from ..errors import RagError
 from ..logging_config import get_logger
 from .chunker import BaseChunker, get_chunker
 from .embedder import Embedder, get_embedder
-from .pdf_loader import ensure_text_pdf, extract_pages_text, render_page_png, vision_transcribe_page
+from .pdf_loader import (
+    ensure_text_pdf,
+    extract_pages_text,
+    is_supported_file,
+    render_page_png,
+    vision_transcribe_page,
+)
 
 log = get_logger(__name__)
 
@@ -82,7 +88,7 @@ def ingest_pdf(
 
     path = Path(path)
     if not path.exists():
-        raise RagError(f"PDF not found: {path}")
+        raise RagError(f"File not found: {path}")
     filename = path.name
     log.info("── Ingesting %s ──", filename)
 
@@ -155,26 +161,30 @@ def ingest_directory(
     directory: str | Path | None = None,
     settings: Settings | None = None,
 ) -> list[IngestResult]:
-    """Ingest every ``*.pdf`` in a directory (default: ``DATA_RAW_DIR``)."""
+    """Ingest every supported file (PDF or image) in a directory.
+
+    Default directory is ``DATA_RAW_DIR``. Selection is case-insensitive and
+    skips unsupported types (e.g. .txt/.docx) silently.
+    """
     settings = settings or get_settings()
     init_schema(settings)  # idempotent — safe to call before any ingestion
     directory = Path(directory) if directory else settings.raw_dir
-    pdfs = sorted(directory.glob("*.pdf"))
-    if not pdfs:
-        log.warning("No PDFs found in %s", directory)
+    files = sorted(p for p in directory.iterdir() if p.is_file() and is_supported_file(p))
+    if not files:
+        log.warning("No ingestable files (PDF/image) found in %s", directory)
         return []
 
     embedder = get_embedder()
     chunker = get_chunker(settings)
     results: list[IngestResult] = []
-    for pdf in pdfs:
+    for f in files:
         try:
-            results.append(ingest_pdf(pdf, settings, embedder, chunker))
+            results.append(ingest_pdf(f, settings, embedder, chunker))
         except RagError as exc:
-            log.error("Failed to ingest %s: %s", pdf.name, exc)
+            log.error("Failed to ingest %s: %s", f.name, exc)
             results.append(
                 IngestResult(
-                    filename=pdf.name,
+                    filename=f.name,
                     document_id=None,
                     num_pages=0,
                     num_chunks=0,

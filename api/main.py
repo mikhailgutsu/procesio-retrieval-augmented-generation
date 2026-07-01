@@ -77,15 +77,19 @@ def ingest(
     file: UploadFile | None = File(default=None),
     path: str | None = Form(default=None),
 ) -> dict:
-    """Ingest a PDF supplied either as a multipart upload or a server-side path."""
+    """Ingest a PDF or image supplied either as a multipart upload or a server-side path."""
+    from src.ingest.pdf_loader import is_supported_file
     from src.ingest.pipeline import ingest_pdf
 
     settings = get_settings()
     settings.ensure_dirs()
 
     if file is not None:
-        if not file.filename or not file.filename.lower().endswith(".pdf"):
-            raise HTTPException(status_code=400, detail="Only .pdf uploads are supported.")
+        if not file.filename or not is_supported_file(file.filename):
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported file type. Allowed: PDF or image (png/jpg/jpeg/tiff/bmp/webp).",
+            )
         target = settings.raw_dir / Path(file.filename).name
         target.write_bytes(file.file.read())
         pdf_path: str | Path = target
