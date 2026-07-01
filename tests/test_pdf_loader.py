@@ -8,7 +8,6 @@ from src.ingest.pdf_loader import (
     extract_pages_text,
     image_to_pdf,
     is_scanned_pdf,
-    is_supported_file,
 )
 from tests.conftest import make_settings, make_text_png
 
@@ -38,13 +37,6 @@ def test_is_scanned_pdf_born_digital(text_pdf):
 def test_is_scanned_pdf_blank_pages(blank_pdf):
     settings = make_settings(scanned_char_threshold=100, scanned_page_ratio=0.5)
     assert is_scanned_pdf(blank_pdf, settings) is True
-
-
-def test_is_supported_file_accepts_pdf_and_images():
-    for ok in ["a.pdf", "A.PDF", "x.png", "y.JPG", "z.tiff", "w.jpeg", "v.webp"]:
-        assert is_supported_file(ok) is True
-    for no in ["a.txt", "b.docx", "c", "d.csv"]:
-        assert is_supported_file(no) is False
 
 
 def test_image_to_pdf_is_detected_as_scanned(tmp_path):

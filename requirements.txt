@@ -3,6 +3,10 @@ PyMuPDF>=1.24,<2.0
 
 ocrmypdf>=16.0,<17.0
 
+# Office documents: PowerPoint slides (.pptx) and Excel sheets (.xlsx/.xlsm)
+python-pptx>=1.0
+openpyxl>=3.1
+
 # Embeddings (multilingual). Pulls in torch/transformers.
 sentence-transformers>=3.0,<6.0
 

@@ -20,15 +20,10 @@ from ..logging_config import get_logger
 
 log = get_logger(__name__)
 
-# Image inputs are OCR'd like scanned PDFs. A PDF is text-first; anything below is
-# an image that gets embedded into a 1-page PDF and then OCR'd.
+# Image inputs are OCR'd like scanned PDFs. A PDF is text-first; anything here is
+# an image that gets embedded into a 1-page PDF and then OCR'd. The aggregate set
+# of ingestable types (incl. office formats) lives in `document_loader`.
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
-SUPPORTED_SUFFIXES = {".pdf"} | IMAGE_SUFFIXES
-
-
-def is_supported_file(path: str | Path) -> bool:
-    """True for PDFs and supported image types (case-insensitive)."""
-    return Path(path).suffix.lower() in SUPPORTED_SUFFIXES
 
 
 @dataclass
@@ -46,10 +41,12 @@ class ScanDetection:
 # ─────────────────────────────────────────────────────────────────────────────
 # Text extraction
 # ─────────────────────────────────────────────────────────────────────────────
-def _sanitize(text: str) -> str:
-    # PostgreSQL text columns cannot store NUL (0x00) bytes, which some PDFs emit
-    # for unmapped glyphs. Strip them (and any other C0 control chars except
-    # tab/newline/carriage-return) so extraction never breaks the insert.
+def sanitize_text(text: str) -> str:
+    """Strip characters PostgreSQL text columns can't store.
+
+    NUL (0x00) bytes — emitted by some PDFs for unmapped glyphs — break inserts;
+    also drop other C0 control chars except tab/newline/carriage-return.
+    """
     if "\x00" in text:
         text = text.replace("\x00", "")
     return "".join(c for c in text if c >= " " or c in "\t\n\r")
@@ -60,7 +57,7 @@ def extract_pages_text(pdf_path: str | Path) -> list[str]:
     pages: list[str] = []
     with fitz.open(pdf_path) as doc:
         for page in doc:
-            pages.append(_sanitize(page.get_text("text")))
+            pages.append(sanitize_text(page.get_text("text")))
     return pages
 
 

@@ -55,7 +55,7 @@ query is embedded identically to the stored passages.
 │   ├── db.py                  # pool, idempotent schema, insert/search SQL
 │   ├── errors.py              # typed exceptions per pipeline stage
 │   ├── cli.py                 # init-db / ingest / ask / stats / reset-db
-│   ├── ingest/{pdf_loader,chunker,embedder,pipeline}.py
+│   ├── ingest/{document_loader,pdf_loader,chunker,embedder,pipeline}.py
 │   └── query/{retriever,extractor,highlighter,pipeline}.py
 ├── api/main.py                # FastAPI: POST /ingest, POST /ask, GET /health
 ├── scripts/make_sample_pdf.py # generates a demo Romanian PDF into data/raw/
@@ -115,9 +115,13 @@ make ingest                              # == python -m src.cli ingest
 .venv/bin/python -m src.cli ingest --path data/raw/statie_110kV_instructiuni.pdf
 ```
 
-Supported inputs: **PDF** and **images** (`.png/.jpg/.jpeg/.tif/.tiff/.bmp/.webp`).
-Images and scanned PDFs are OCR'd automatically into a text-layer PDF (requires
-Tesseract + Ghostscript). Unsupported types in `data/raw/` are skipped silently.
+Supported inputs:
+- **PDF** and **images** (`.png/.jpg/.jpeg/.tif/.tiff/.bmp/.webp`) — scans/images are
+  OCR'd automatically into a text-layer PDF (requires Tesseract + Ghostscript).
+- **PowerPoint** (`.pptx`) — 1 slide = 1 page. **Excel** (`.xlsx/.xlsm`) — 1 sheet = 1 page.
+
+Legacy binary Office formats (`.ppt/.xls`) and other types are skipped silently;
+convert them to `.pptx/.xlsx/.pdf` first.
 
 The first ingest downloads the embedding model (~1 GB for `multilingual-e5-base`).
 Re-ingesting the same file is a no-op (deduped by content hash;
@@ -258,8 +262,10 @@ docker compose --profile app up --build
 - The LLM is instructed to return **verbatim** spans; highlighting locates them on
   the page with `page.search_for`. Multi-line spans may not always match in the PDF
   (the UI character offsets still resolve) — this is best-effort by design.
-- Inputs: PDF and single-page images (png/jpg/jpeg/tiff/bmp/webp). Each image
-  becomes one 1-page document, OCR'd like a scanned PDF.
+- Inputs: PDF, single-page images (png/jpg/jpeg/tiff/bmp/webp), PowerPoint (.pptx),
+  Excel (.xlsx/.xlsm). Images are OCR'd like scanned PDFs; PowerPoint maps 1 slide →
+  1 page and Excel 1 sheet → 1 page. Office files have no source PDF, so highlighting
+  is UI-offset only (no PDF annotation) — citations by slide/sheet still resolve.
 - OCR requires Tesseract (with the `OCR_LANGUAGES` packs, e.g. `ron`) + Ghostscript
   on the host (or use the app container). A missing language pack fails that file
   with a clear error and continues with the rest.

@@ -1,8 +1,8 @@
 """Ingestion orchestration — runs steps 1–5 per document.
 
-  1. Load PDF (and dedupe by content hash).
-  2. Detect scanned/image PDFs and OCR them → text-bearing PDF.
-  3. Extract text page-by-page and chunk it (1 page = 1 chunk, v1).
+  1. Load a document (PDF, image, PowerPoint, or Excel) and dedupe by content hash.
+  2. Turn it into a text-bearing form (OCR for scans/images; native text for Office).
+  3. Extract text per page/slide/sheet and chunk it (1 page = 1 chunk, v1).
   4. Embed each chunk with the shared embedder.
   5. Persist document + chunks (steps 4 & 5 in the same transaction).
 """
@@ -25,14 +25,8 @@ from ..db import (
 from ..errors import RagError
 from ..logging_config import get_logger
 from .chunker import BaseChunker, get_chunker
+from .document_loader import is_supported_file, load_document
 from .embedder import Embedder, get_embedder
-from .pdf_loader import (
-    ensure_text_pdf,
-    extract_pages_text,
-    is_supported_file,
-    render_page_png,
-    vision_transcribe_page,
-)
 
 log = get_logger(__name__)
 
@@ -44,6 +38,7 @@ class IngestResult:
     num_pages: int
     num_chunks: int
     was_ocred: bool
+    kind: str = ""
     skipped: bool = False
     reason: str = ""
     errors: list[str] = field(default_factory=list)
@@ -57,30 +52,13 @@ def compute_file_hash(path: str | Path) -> str:
     return h.hexdigest()
 
 
-def _maybe_vision_fill(
-    text_pdf: Path, pages: list[str], was_ocred: bool, settings: Settings
-) -> list[str]:
-    """Optionally transcribe pages still empty after OCR using a Claude vision call."""
-    if not (was_ocred and settings.ocr_vision_fallback):
-        return pages
-    filled = list(pages)
-    for i, text in enumerate(pages):
-        if len(text.strip()) < settings.scanned_char_threshold:
-            log.info("Vision fallback on page %d of %s", i + 1, text_pdf.name)
-            png = render_page_png(text_pdf, i)
-            transcribed = vision_transcribe_page(png, settings)
-            if transcribed:
-                filled[i] = transcribed
-    return filled
-
-
-def ingest_pdf(
+def ingest_file(
     path: str | Path,
     settings: Settings | None = None,
     embedder: Embedder | None = None,
     chunker: BaseChunker | None = None,
 ) -> IngestResult:
-    """Ingest a single PDF end-to-end. Returns an :class:`IngestResult`."""
+    """Ingest a single document (PDF/image/pptx/xlsx) end-to-end."""
     settings = settings or get_settings()
     embedder = embedder or get_embedder()
     chunker = chunker or get_chunker(settings)
@@ -112,20 +90,23 @@ def ingest_pdf(
         replace_existing_id = existing["id"]
         log.info("Replace: re-ingesting %s (was document id=%s).", filename, existing["id"])
 
-    # 2. Ensure a text-bearing PDF (OCR if scanned).
-    text_pdf, was_ocred = ensure_text_pdf(path, settings)
-
-    # 3. Extract per-page text (+ optional vision fallback) and chunk it.
-    pages = extract_pages_text(text_pdf)
-    pages = _maybe_vision_fill(text_pdf, pages, was_ocred, settings)
+    # 2–3. Load into per-page text (OCR for scans/images, native for Office) and chunk.
+    loaded = load_document(path, settings)
+    pages = loaded.pages
     num_pages = len(pages)
     chunks = chunker.chunk(pages)
     if not chunks:
         raise RagError(
             f"No non-empty text extracted from {filename}. "
-            f"If it is a scan, enable OCR / vision fallback."
+            f"If it is a scan/image, enable OCR / vision fallback."
         )
-    log.info("Chunked %s into %d chunk(s) across %d page(s).", filename, len(chunks), num_pages)
+    log.info(
+        "Chunked %s (%s) into %d chunk(s) across %d page(s).",
+        filename,
+        loaded.kind,
+        len(chunks),
+        num_pages,
+    )
 
     # 4. Embed all chunk contents with the shared embedder.
     embeddings = embedder.encode_passages([c.content for c in chunks])
@@ -142,7 +123,7 @@ def ingest_pdf(
             source=str(path),
             num_pages=num_pages,
             content_hash=content_hash,
-            text_pdf_path=str(text_pdf),
+            text_pdf_path=loaded.text_pdf_path,
         )
         inserted = insert_chunks(conn, document_id, rows)
         conn.commit()
@@ -153,25 +134,30 @@ def ingest_pdf(
         document_id=document_id,
         num_pages=num_pages,
         num_chunks=inserted,
-        was_ocred=was_ocred,
+        was_ocred=loaded.was_ocred,
+        kind=loaded.kind,
     )
+
+
+# Backward-compatible alias — ingestion now handles all supported formats.
+ingest_pdf = ingest_file
 
 
 def ingest_directory(
     directory: str | Path | None = None,
     settings: Settings | None = None,
 ) -> list[IngestResult]:
-    """Ingest every supported file (PDF or image) in a directory.
+    """Ingest every supported file (PDF/image/pptx/xlsx) in a directory.
 
     Default directory is ``DATA_RAW_DIR``. Selection is case-insensitive and
-    skips unsupported types (e.g. .txt/.docx) silently.
+    skips unsupported types (e.g. .txt/.docx/.ppt/.xls) silently.
     """
     settings = settings or get_settings()
     init_schema(settings)  # idempotent — safe to call before any ingestion
     directory = Path(directory) if directory else settings.raw_dir
     files = sorted(p for p in directory.iterdir() if p.is_file() and is_supported_file(p))
     if not files:
-        log.warning("No ingestable files (PDF/image) found in %s", directory)
+        log.warning("No ingestable files (PDF/image/pptx/xlsx) found in %s", directory)
         return []
 
     embedder = get_embedder()
@@ -179,7 +165,7 @@ def ingest_directory(
     results: list[IngestResult] = []
     for f in files:
         try:
-            results.append(ingest_pdf(f, settings, embedder, chunker))
+            results.append(ingest_file(f, settings, embedder, chunker))
         except RagError as exc:
             log.error("Failed to ingest %s: %s", f.name, exc)
             results.append(

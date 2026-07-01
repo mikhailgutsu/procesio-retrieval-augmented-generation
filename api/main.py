@@ -77,9 +77,9 @@ def ingest(
     file: UploadFile | None = File(default=None),
     path: str | None = Form(default=None),
 ) -> dict:
-    """Ingest a PDF or image supplied either as a multipart upload or a server-side path."""
-    from src.ingest.pdf_loader import is_supported_file
-    from src.ingest.pipeline import ingest_pdf
+    """Ingest a PDF, image, or Office file (multipart upload or server-side path)."""
+    from src.ingest.document_loader import is_supported_file
+    from src.ingest.pipeline import ingest_file
 
     settings = get_settings()
     settings.ensure_dirs()
@@ -88,7 +88,10 @@ def ingest(
         if not file.filename or not is_supported_file(file.filename):
             raise HTTPException(
                 status_code=400,
-                detail="Unsupported file type. Allowed: PDF or image (png/jpg/jpeg/tiff/bmp/webp).",
+                detail=(
+                    "Unsupported file type. Allowed: PDF, image "
+                    "(png/jpg/jpeg/tiff/bmp/webp), PowerPoint (.pptx), Excel (.xlsx/.xlsm)."
+                ),
             )
         target = settings.raw_dir / Path(file.filename).name
         target.write_bytes(file.file.read())
@@ -101,7 +104,7 @@ def ingest(
         raise HTTPException(status_code=400, detail="Provide a file upload or a 'path' field.")
 
     try:
-        result = ingest_pdf(pdf_path)
+        result = ingest_file(pdf_path)
     except RagError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return result.__dict__

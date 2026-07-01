@@ -43,23 +43,26 @@ def _cmd_reset_db(args: argparse.Namespace) -> int:
 
 
 def _cmd_ingest(args: argparse.Namespace) -> int:
-    from .ingest.pipeline import ingest_directory, ingest_pdf
+    from .ingest.pipeline import ingest_directory, ingest_file
     from .db import init_schema
 
     init_schema()
     if args.path:
-        results = [ingest_pdf(args.path)]
+        results = [ingest_file(args.path)]
     else:
         results = ingest_directory(args.dir)
 
     if not results:
-        print("No PDFs found to ingest.")
+        print("No ingestable files (PDF/image/pptx/xlsx) found.")
         return 0
     print(f"\n{'FILE':40} {'DOC ID':>7} {'PAGES':>6} {'CHUNKS':>7}  STATUS")
     for r in results:
-        status = "skipped" if r.skipped else ("ocr'd" if r.was_ocred else "ok")
         if r.errors:
             status = f"ERROR: {r.errors[0][:40]}"
+        elif r.skipped:
+            status = "skipped"
+        else:
+            status = (r.kind or "ok") + (" (ocr)" if r.was_ocred else "")
         print(
             f"{r.filename[:40]:40} {str(r.document_id or '-'):>7} "
             f"{r.num_pages:>6} {r.num_chunks:>7}  {status}"
