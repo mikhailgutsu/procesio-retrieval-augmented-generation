@@ -8,7 +8,6 @@ that is the original file; for scanned/image PDFs it is an OCR'd copy written to
 
 from __future__ import annotations
 
-import base64
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -194,50 +193,22 @@ def render_page_png(pdf_path: str | Path, page_index: int, zoom: float = 2.0) ->
         return pix.tobytes("png")
 
 
-def vision_transcribe_page(png_bytes: bytes, settings: Settings | None = None) -> str:
-    """Transcribe a page image with Claude vision. Returns '' on any failure."""
-    settings = settings or get_settings()
-    if not settings.anthropic_api_key:
-        log.warning("Vision fallback requested but ANTHROPIC_API_KEY is unset; skipping.")
-        return ""
-    try:
-        import anthropic
+_VISION_PROMPT = (
+    "This is a page or image from technical substation documentation (a scan, a "
+    "single-line/monofilar diagram, an equipment photo, or a schematic). First, "
+    "transcribe ALL visible text verbatim, preserving reading order — labels, "
+    "bay/cell names, equipment tags, values and units. Then, if it is a diagram or "
+    "photo, add a short factual description of what it shows (equipment, connections, "
+    "identifiers) so it can be found by search. Respond in the document's language. "
+    "Return only the transcription and description, no preamble."
+)
 
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-        b64 = base64.standard_b64encode(png_bytes).decode("utf-8")
-        resp = client.messages.create(
-            model=settings.anthropic_model,
-            max_tokens=settings.llm_max_tokens,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/png",
-                                "data": b64,
-                            },
-                        },
-                        {
-                            "type": "text",
-                            "text": (
-                                "This is a page or image from technical substation documentation "
-                                "(a scan, a single-line/monofilar diagram, an equipment photo, or a "
-                                "schematic). First, transcribe ALL visible text verbatim, preserving "
-                                "reading order — labels, bay/cell names, equipment tags, values and "
-                                "units. Then, if it is a diagram or photo, add a short factual "
-                                "description of what it shows (equipment, connections, identifiers) so "
-                                "it can be found by search. Respond in the document's language. "
-                                "Return only the transcription and description, no preamble."
-                            ),
-                        },
-                    ],
-                }
-            ],
-        )
-        return "".join(b.text for b in resp.content if b.type == "text").strip()
-    except Exception as exc:  # vision fallback is best-effort
-        log.warning("Vision transcription failed: %s", exc)
-        return ""
+
+def vision_transcribe_page(png_bytes: bytes, settings: Settings | None = None) -> str:
+    """Transcribe/describe a page image via the configured vision provider.
+
+    Returns '' on any failure or when no API key is configured (best-effort).
+    """
+    from ..llm import vision
+
+    return vision(_VISION_PROMPT, png_bytes, settings or get_settings())

@@ -36,12 +36,21 @@ class Settings(BaseSettings):
     # ── Retrieval ─────────────────────────────────────────────────────────────
     top_k: int = 5
 
-    # ── LLM (answer extraction) ───────────────────────────────────────────────
-    llm_provider: str = "anthropic"
+    # ── LLM (answer extraction + vision) ──────────────────────────────────────
+    # Provider for the answer-extraction step: "anthropic" or "openai".
+    llm_provider: str = Field(default="anthropic", pattern="^(anthropic|openai)$")
+    # Provider for the vision fallback; empty = inherit llm_provider.
+    vision_provider: str = Field(default="", pattern="^(anthropic|openai|)$")
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-opus-4-8"
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o-mini"
     llm_max_tokens: int = 4096
     llm_thinking: bool = False
+
+    @property
+    def resolved_vision_provider(self) -> str:
+        return (self.vision_provider or self.llm_provider).lower()
 
     # ── Ingestion ─────────────────────────────────────────────────────────────
     data_raw_dir: str = "data/raw"

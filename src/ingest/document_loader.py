@@ -14,10 +14,14 @@ from __future__ import annotations
 
 import csv
 import io
+import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..config import Settings, get_settings
+from ..errors import RagError
 from ..logging_config import get_logger
 from .pdf_loader import (
     IMAGE_SUFFIXES,
@@ -34,15 +38,18 @@ PDF_SUFFIXES = {".pdf"}
 PPTX_SUFFIXES = {".pptx"}           # python-pptx reads .pptx only (legacy .ppt unsupported)
 XLSX_SUFFIXES = {".xlsx", ".xlsm"}  # openpyxl (modern XML spreadsheets)
 XLS_SUFFIXES = {".xls"}             # xlrd (legacy binary spreadsheets)
-DOCX_SUFFIXES = {".docx"}           # python-docx (legacy binary .doc unsupported)
+DOCX_SUFFIXES = {".docx"}           # python-docx (modern XML Word)
+DOC_SUFFIXES = {".doc"}             # legacy binary Word via textutil/antiword/soffice
 CSV_SUFFIXES = {".csv"}
-OFFICE_SUFFIXES = PPTX_SUFFIXES | XLSX_SUFFIXES | XLS_SUFFIXES | DOCX_SUFFIXES | CSV_SUFFIXES
+OFFICE_SUFFIXES = (
+    PPTX_SUFFIXES | XLSX_SUFFIXES | XLS_SUFFIXES | DOCX_SUFFIXES | DOC_SUFFIXES | CSV_SUFFIXES
+)
 SUPPORTED_SUFFIXES = PDF_SUFFIXES | IMAGE_SUFFIXES | OFFICE_SUFFIXES
 
 
 def is_supported_file(path: str | Path) -> bool:
     """True for any ingestable type: PDF, image, PowerPoint (.pptx),
-    Excel (.xlsx/.xlsm/.xls), Word (.docx), CSV."""
+    Excel (.xlsx/.xlsm/.xls), Word (.docx/.doc), CSV."""
     return Path(path).suffix.lower() in SUPPORTED_SUFFIXES
 
 
@@ -171,6 +178,46 @@ def docx_to_pages(path: str | Path, block_size: int = 1500) -> list[str]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Legacy Word (.doc) — extract plain text with an external converter, then paginate.
+# python-docx cannot read .doc; try macOS `textutil`, then `antiword`, then LibreOffice.
+# ─────────────────────────────────────────────────────────────────────────────
+def _doc_extract_text(path: Path) -> str:
+    src = str(path)
+    if shutil.which("textutil"):  # macOS built-in
+        out = subprocess.run(
+            ["textutil", "-convert", "txt", "-stdout", src], capture_output=True, timeout=180
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.decode("utf-8", errors="replace")
+    if shutil.which("antiword"):
+        out = subprocess.run(["antiword", src], capture_output=True, timeout=180)
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.decode("utf-8", errors="replace")
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if soffice:
+        with tempfile.TemporaryDirectory() as td:
+            subprocess.run(
+                [soffice, "--headless", "--convert-to", "txt:Text", "--outdir", td, src],
+                capture_output=True,
+                timeout=240,
+            )
+            txt = Path(td) / (path.stem + ".txt")
+            if txt.exists():
+                return txt.read_text(encoding="utf-8", errors="replace")
+    raise RagError(
+        f"Cannot read legacy .doc {path.name}: no converter found. Install one of "
+        "`antiword` or LibreOffice (macOS has `textutil` built-in), or convert to .docx."
+    )
+
+
+def doc_to_pages(path: str | Path, block_size: int = 1500) -> list[str]:
+    text = _doc_extract_text(Path(path))
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    pages = _paginate_lines(lines, block_size)
+    return [sanitize_text(p) for p in pages] if pages else [""]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # CSV — delimiter sniffed, paginated into ~block_size-char blocks
 # ─────────────────────────────────────────────────────────────────────────────
 def csv_to_pages(path: str | Path, block_size: int = 1500) -> list[str]:
@@ -241,6 +288,11 @@ def load_document(path: str | Path, settings: Settings | None = None) -> LoadedD
         pages = docx_to_pages(path, settings.chunk_window_size)
         log.info("Loaded Word %s — %d block(s).", path.name, len(pages))
         return LoadedDocument(pages=pages, text_pdf_path=None, was_ocred=False, kind="docx")
+
+    if suffix in DOC_SUFFIXES:
+        pages = doc_to_pages(path, settings.chunk_window_size)
+        log.info("Loaded Word (legacy .doc) %s — %d block(s).", path.name, len(pages))
+        return LoadedDocument(pages=pages, text_pdf_path=None, was_ocred=False, kind="doc")
 
     if suffix in CSV_SUFFIXES:
         pages = csv_to_pages(path, settings.chunk_window_size)

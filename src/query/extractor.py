@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, Field
 
 from ..config import Settings, get_settings
-from ..errors import ConfigError, ExtractionError
+from ..errors import ExtractionError
 from ..logging_config import get_logger
 
 if TYPE_CHECKING:
@@ -101,60 +101,26 @@ def _extract_json(text: str) -> dict[str, Any]:
         raise
 
 
-def _call_claude(client: Any, settings: Settings, system: str, user: str) -> str:
-    """Return the model's text output, preferring structured outputs, then a plain call."""
-    kwargs: dict[str, Any] = {
-        "model": settings.anthropic_model,
-        "max_tokens": settings.llm_max_tokens,
-        "system": system,
-        "messages": [{"role": "user", "content": user}],
-    }
-    if settings.llm_thinking:
-        kwargs["thinking"] = {"type": "adaptive"}
-
-    try:
-        resp = client.messages.create(
-            output_config={"format": {"type": "json_schema", "schema": _JSON_SCHEMA}},
-            **kwargs,
-        )
-    except Exception as exc:  # older SDK/model without output_config → plain JSON instruction
-        log.warning("Structured outputs unavailable (%s); falling back to plain JSON.", exc)
-        kwargs["system"] = system + "\n\nRespond with ONLY the JSON object, no prose."
-        resp = client.messages.create(**kwargs)
-
-    if getattr(resp, "stop_reason", None) == "refusal":
-        raise ExtractionError("The model refused to answer this request.")
-    text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
-    if not text.strip():
-        raise ExtractionError("The model returned no text output.")
-    return text
-
-
 def extract_answer(
     question: str,
     chunks: list["RetrievedChunk"],
     settings: Settings | None = None,
     client: Any | None = None,
 ) -> ExtractionResult:
-    """Extract verbatim answering spans grounded in ``chunks``."""
+    """Extract verbatim answering spans grounded in ``chunks`` (provider-agnostic)."""
+    from ..llm import complete_json
+
     settings = settings or get_settings()
     if not chunks:
         return ExtractionResult(
             answerable=False, answer="No relevant pages were retrieved.", spans=[]
         )
 
-    if client is None:
-        if not settings.anthropic_api_key:
-            raise ConfigError(
-                "ANTHROPIC_API_KEY is not set — required for the answer-extraction step."
-            )
-        import anthropic
-
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-
     user = _build_user_prompt(question, chunks)
-    log.info("Extracting answer with %s over %d page(s)…", settings.anthropic_model, len(chunks))
-    text = _call_claude(client, settings, _SYSTEM, user)
+    log.info(
+        "Extracting answer with provider=%s over %d page(s)…", settings.llm_provider, len(chunks)
+    )
+    text = complete_json(_SYSTEM, user, settings=settings, json_schema=_JSON_SCHEMA, client=client)
 
     try:
         result = ExtractionResult.model_validate(_extract_json(text))

@@ -4,8 +4,11 @@ plus the aggregate supported-file check. No DB / model / network needed.
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
 
+import pytest
 from docx import Document
 from pptx import Presentation
 from pptx.util import Inches
@@ -107,10 +110,23 @@ def test_csv_to_pages_sniffs_delimiter(tmp_path):
     assert "\t" in text  # ';' delimiter normalized to tab-separated cells
 
 
+def test_doc_legacy_word(tmp_path):
+    if not shutil.which("textutil"):
+        pytest.skip("no .doc converter (textutil) available")
+    from src.ingest.document_loader import doc_to_pages
+
+    txt = tmp_path / "src.txt"
+    txt.write_text("Regulament mentenanta preventiva.\nVerificati protectiile inainte de lucru.\n")
+    doc = tmp_path / "out.doc"
+    subprocess.run(["textutil", "-convert", "doc", "-output", str(doc), str(txt)], check=True)
+    text = "\n".join(doc_to_pages(doc, block_size=1500))
+    assert "Regulament" in text or "mentenanta" in text
+
+
 def test_is_supported_file_aggregate():
     for ok in ["a.pdf", "A.PDF", "x.png", "y.JPG", "p.pptx", "e.xlsx", "f.XLSM",
-               "g.xls", "h.docx", "i.csv"]:
+               "g.xls", "h.docx", "j.doc", "i.csv"]:
         assert is_supported_file(ok) is True, ok
-    # legacy binary Word/PowerPoint, videos, archives, and other types are not supported
-    for no in ["a.txt", "b.doc", "c.ppt", "d.mov", "e.rar", "g"]:
+    # legacy binary PowerPoint, videos, archives, and other types are not supported
+    for no in ["a.txt", "c.ppt", "d.mov", "e.rar", "g"]:
         assert is_supported_file(no) is False, no

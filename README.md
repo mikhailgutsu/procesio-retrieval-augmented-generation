@@ -121,10 +121,15 @@ Supported inputs:
   `OCR_VISION_FALLBACK=true` + an Anthropic key, diagrams/photos that OCR can't read are
   transcribed and described by Claude vision so they become searchable.
 - **PowerPoint** `.pptx` (1 slide = 1 page) · **Excel** `.xlsx/.xlsm/.xls` (1 sheet = 1 page).
-- **Word** `.docx` and **CSV** — paginated into ~text blocks (these formats have no native pages).
+- **Word** `.docx/.doc` and **CSV** — paginated into ~text blocks (these formats have no
+  native pages). Legacy `.doc` needs a converter on the host (`textutil` on macOS is
+  built-in; `antiword` or LibreOffice on Linux — the app container ships `antiword`).
 
-Legacy binary `.doc/.ppt`, archives (`.rar/.zip`), video, and other types are skipped
-silently; extract archives and convert `.doc/.ppt` first.
+Legacy `.ppt`, archives (`.rar/.zip`), video, and other types are skipped silently;
+extract archives and convert `.ppt` first.
+
+To make diagrams/photos that OCR can't read searchable, enable the vision fallback —
+see [VISION_FALLBACK.md](VISION_FALLBACK.md) (e.g. with a cheap OpenAI `gpt-4o-mini` key).
 
 The first ingest downloads the embedding model (~1 GB for `multilingual-e5-base`).
 Re-ingesting the same file is a no-op (deduped by content hash;
@@ -180,11 +185,13 @@ All configuration is environment-driven (`.env`). Key settings:
 | `EMBEDDING_DIM`                                       | `768`                                     | Must match the model **and** the `chunks` vector column    |
 | `EMBEDDING_QUERY_PREFIX` / `EMBEDDING_PASSAGE_PREFIX` | `query:` / `passage:`                     | e5 instruction prefixes (empty for MiniLM)                 |
 | `TOP_K`                                               | `5`                                       | Chunks retrieved per question                              |
-| `ANTHROPIC_MODEL`                                     | `claude-opus-4-8`                         | LLM for answer extraction                                  |
-| `ANTHROPIC_API_KEY`                                   | —                                         | Required for `/ask`                                        |
+| `LLM_PROVIDER`                                        | `anthropic`                               | Answer-extraction provider: `anthropic` or `openai`        |
+| `VISION_PROVIDER`                                     | — (inherits `LLM_PROVIDER`)               | Vision-fallback provider: `anthropic` / `openai`           |
+| `ANTHROPIC_MODEL` / `ANTHROPIC_API_KEY`               | `claude-opus-4-8` / —                     | Claude model + key (needed for `/ask` when provider=anthropic) |
+| `OPENAI_MODEL` / `OPENAI_API_KEY`                     | `gpt-4o-mini` / —                         | OpenAI model + key (used when a provider = `openai`)       |
 | `SCANNED_CHAR_THRESHOLD` / `SCANNED_PAGE_RATIO`       | `100` / `0.5`                             | Scanned-detection thresholds                               |
 | `OCR_LANGUAGES`                                       | `ron+eng`                                 | Tesseract language packs                                   |
-| `OCR_VISION_FALLBACK`                                 | `false`                                   | Transcribe still-empty pages with Claude vision            |
+| `OCR_VISION_FALLBACK`                                 | `false`                                   | Describe unreadable diagrams/photos — see [VISION_FALLBACK.md](VISION_FALLBACK.md) |
 | `CHUNK_STRATEGY`                                      | `page`                                    | `page` (1 page = 1 chunk) or `window` (fixed char windows) |
 | `INGEST_ON_DUPLICATE`                                 | `skip`                                    | `skip` or `replace` on re-ingest of the same file          |
 | `HIGHLIGHT_PDF`                                       | `true`                                    | Also emit annotated PDF/PNG per span                       |

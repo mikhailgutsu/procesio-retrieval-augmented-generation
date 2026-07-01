@@ -16,8 +16,9 @@ sentence-transformers>=3.0,<6.0
 psycopg[binary,pool]>=3.2,<4.0
 pgvector>=0.3.6,<0.5
 
-# LLM answer extraction
+# LLM answer extraction + vision fallback (provider configurable: anthropic | openai)
 anthropic>=0.69,<1.0
+openai>=1.40
 
 # Config from environment / .env
 pydantic>=2.7,<3.0
