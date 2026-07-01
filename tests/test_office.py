@@ -6,11 +6,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from docx import Document
 from pptx import Presentation
 from pptx.util import Inches
 from openpyxl import Workbook
 
-from src.ingest.document_loader import is_supported_file, pptx_to_pages, xlsx_to_pages
+from src.ingest.document_loader import (
+    csv_to_pages,
+    docx_to_pages,
+    is_supported_file,
+    pptx_to_pages,
+    xlsx_to_pages,
+)
 
 
 def make_pptx(path: Path, slides: list[str]) -> Path:
@@ -58,9 +65,52 @@ def test_xlsx_one_sheet_per_page(tmp_path):
     assert "before energizing" in pages[1]
 
 
+def make_docx(path: Path, paragraphs: list[str], table: list[list] | None = None) -> Path:
+    doc = Document()
+    for p in paragraphs:
+        doc.add_paragraph(p)
+    if table:
+        t = doc.add_table(rows=len(table), cols=len(table[0]))
+        for i, row in enumerate(table):
+            for j, val in enumerate(row):
+                t.cell(i, j).text = str(val)
+    doc.save(str(path))
+    return path
+
+
+def test_docx_paragraphs_and_tables(tmp_path):
+    p = make_docx(
+        tmp_path / "doc.docx",
+        ["Manual de exploatare dulap LCC.", "Verificati protectiile inainte de punere sub tensiune."],
+        table=[["parametru", "valoare"], ["tensiune", "110 kV"]],
+    )
+    text = "\n".join(docx_to_pages(p, block_size=1500))
+    assert "Manual de exploatare" in text
+    assert "protectiile" in text
+    assert "110 kV" in text  # table cell captured
+
+
+def test_docx_paginates_long_document(tmp_path):
+    p = make_docx(
+        tmp_path / "long.docx",
+        [f"Paragraful {i} cu ceva continut tehnic relevant despre statii." for i in range(200)],
+    )
+    pages = docx_to_pages(p, block_size=500)
+    assert len(pages) > 1  # a long doc is split into multiple retrievable blocks
+
+
+def test_csv_to_pages_sniffs_delimiter(tmp_path):
+    p = tmp_path / "data.csv"
+    p.write_text("param;valoare;unitate\ncurent;1250;A\ntensiune;110;kV\n", encoding="utf-8")
+    text = "\n".join(csv_to_pages(p, block_size=1500))
+    assert "curent" in text and "1250" in text
+    assert "\t" in text  # ';' delimiter normalized to tab-separated cells
+
+
 def test_is_supported_file_aggregate():
-    for ok in ["a.pdf", "A.PDF", "x.png", "y.JPG", "d.pptx", "e.xlsx", "f.XLSM"]:
+    for ok in ["a.pdf", "A.PDF", "x.png", "y.JPG", "p.pptx", "e.xlsx", "f.XLSM",
+               "g.xls", "h.docx", "i.csv"]:
         assert is_supported_file(ok) is True, ok
-    # legacy binary Office formats and other types are not supported
-    for no in ["a.txt", "b.docx", "c.ppt", "d.xls", "g", "h.csv"]:
+    # legacy binary Word/PowerPoint, videos, archives, and other types are not supported
+    for no in ["a.txt", "b.doc", "c.ppt", "d.mov", "e.rar", "g"]:
         assert is_supported_file(no) is False, no

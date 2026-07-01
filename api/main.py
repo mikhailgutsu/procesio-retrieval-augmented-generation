@@ -90,7 +90,8 @@ def ingest(
                 status_code=400,
                 detail=(
                     "Unsupported file type. Allowed: PDF, image "
-                    "(png/jpg/jpeg/tiff/bmp/webp), PowerPoint (.pptx), Excel (.xlsx/.xlsm)."
+                    "(png/jpg/jpeg/tiff/bmp/webp), PowerPoint (.pptx), "
+                    "Excel (.xlsx/.xlsm/.xls), Word (.docx), CSV."
                 ),
             )
         target = settings.raw_dir / Path(file.filename).name

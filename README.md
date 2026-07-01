@@ -117,11 +117,14 @@ make ingest                              # == python -m src.cli ingest
 
 Supported inputs:
 - **PDF** and **images** (`.png/.jpg/.jpeg/.tif/.tiff/.bmp/.webp`) — scans/images are
-  OCR'd automatically into a text-layer PDF (requires Tesseract + Ghostscript).
-- **PowerPoint** (`.pptx`) — 1 slide = 1 page. **Excel** (`.xlsx/.xlsm`) — 1 sheet = 1 page.
+  OCR'd automatically into a text-layer PDF (requires Tesseract + Ghostscript). With
+  `OCR_VISION_FALLBACK=true` + an Anthropic key, diagrams/photos that OCR can't read are
+  transcribed and described by Claude vision so they become searchable.
+- **PowerPoint** `.pptx` (1 slide = 1 page) · **Excel** `.xlsx/.xlsm/.xls` (1 sheet = 1 page).
+- **Word** `.docx` and **CSV** — paginated into ~text blocks (these formats have no native pages).
 
-Legacy binary Office formats (`.ppt/.xls`) and other types are skipped silently;
-convert them to `.pptx/.xlsx/.pdf` first.
+Legacy binary `.doc/.ppt`, archives (`.rar/.zip`), video, and other types are skipped
+silently; extract archives and convert `.doc/.ppt` first.
 
 The first ingest downloads the embedding model (~1 GB for `multilingual-e5-base`).
 Re-ingesting the same file is a no-op (deduped by content hash;
@@ -262,10 +265,11 @@ docker compose --profile app up --build
 - The LLM is instructed to return **verbatim** spans; highlighting locates them on
   the page with `page.search_for`. Multi-line spans may not always match in the PDF
   (the UI character offsets still resolve) — this is best-effort by design.
-- Inputs: PDF, single-page images (png/jpg/jpeg/tiff/bmp/webp), PowerPoint (.pptx),
-  Excel (.xlsx/.xlsm). Images are OCR'd like scanned PDFs; PowerPoint maps 1 slide →
-  1 page and Excel 1 sheet → 1 page. Office files have no source PDF, so highlighting
-  is UI-offset only (no PDF annotation) — citations by slide/sheet still resolve.
+- Inputs: PDF, images (png/jpg/jpeg/tiff/bmp/webp), PowerPoint (.pptx), Excel
+  (.xlsx/.xlsm/.xls), Word (.docx), CSV. Images are OCR'd like scanned PDFs; PowerPoint
+  maps 1 slide → 1 page, Excel 1 sheet → 1 page, and Word/CSV are paginated into text
+  blocks. Non-PDF sources have no source PDF, so highlighting is UI-offset only (no PDF
+  annotation) — citations by slide/sheet/block still resolve.
 - OCR requires Tesseract (with the `OCR_LANGUAGES` packs, e.g. `ron`) + Ghostscript
   on the host (or use the app container). A missing language pack fails that file
   with a clear error and continues with the rest.

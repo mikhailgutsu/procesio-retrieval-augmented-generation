@@ -12,6 +12,8 @@ falls back to the UI payload (character offsets) — no PDF annotation.
 
 from __future__ import annotations
 
+import csv
+import io
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,15 +31,35 @@ from .pdf_loader import (
 log = get_logger(__name__)
 
 PDF_SUFFIXES = {".pdf"}
-PPTX_SUFFIXES = {".pptx"}          # python-pptx reads .pptx only (legacy .ppt unsupported)
-XLSX_SUFFIXES = {".xlsx", ".xlsm"}  # openpyxl reads .xlsx/.xlsm only (legacy .xls unsupported)
-OFFICE_SUFFIXES = PPTX_SUFFIXES | XLSX_SUFFIXES
+PPTX_SUFFIXES = {".pptx"}           # python-pptx reads .pptx only (legacy .ppt unsupported)
+XLSX_SUFFIXES = {".xlsx", ".xlsm"}  # openpyxl (modern XML spreadsheets)
+XLS_SUFFIXES = {".xls"}             # xlrd (legacy binary spreadsheets)
+DOCX_SUFFIXES = {".docx"}           # python-docx (legacy binary .doc unsupported)
+CSV_SUFFIXES = {".csv"}
+OFFICE_SUFFIXES = PPTX_SUFFIXES | XLSX_SUFFIXES | XLS_SUFFIXES | DOCX_SUFFIXES | CSV_SUFFIXES
 SUPPORTED_SUFFIXES = PDF_SUFFIXES | IMAGE_SUFFIXES | OFFICE_SUFFIXES
 
 
 def is_supported_file(path: str | Path) -> bool:
-    """True for any ingestable type: PDF, image, PowerPoint (.pptx), Excel (.xlsx/.xlsm)."""
+    """True for any ingestable type: PDF, image, PowerPoint (.pptx),
+    Excel (.xlsx/.xlsm/.xls), Word (.docx), CSV."""
     return Path(path).suffix.lower() in SUPPORTED_SUFFIXES
+
+
+def _paginate_lines(lines: list[str], block_size: int) -> list[str]:
+    """Group text lines into ~block_size-char pages, breaking at line boundaries."""
+    pages: list[str] = []
+    cur: list[str] = []
+    n = 0
+    for ln in lines:
+        if n and n + len(ln) > block_size:
+            pages.append("\n".join(cur))
+            cur, n = [], 0
+        cur.append(ln)
+        n += len(ln) + 1
+    if cur:
+        pages.append("\n".join(cur))
+    return pages
 
 
 @dataclass
@@ -106,6 +128,72 @@ def xlsx_to_pages(path: str | Path) -> list[str]:
         wb.close()
 
 
+def xls_to_pages(path: str | Path) -> list[str]:
+    """Legacy binary Excel (.xls) — 1 sheet = 1 page (via xlrd)."""
+    import xlrd
+
+    wb = xlrd.open_workbook(str(path))
+    pages: list[str] = []
+    for sh in wb.sheets():
+        lines = [f"[Sheet: {sh.name}]"]
+        for r in range(sh.nrows):
+            cells = [str(sh.cell_value(r, c)) for c in range(sh.ncols) if str(sh.cell_value(r, c)).strip()]
+            if cells:
+                lines.append("\t".join(cells))
+        pages.append(sanitize_text("\n".join(lines)))
+    return pages or [""]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Word (.docx) — paragraphs + tables, paginated into ~block_size-char blocks
+# (a .docx has no fixed pages; each block becomes one retrievable "page").
+# ─────────────────────────────────────────────────────────────────────────────
+def docx_to_pages(path: str | Path, block_size: int = 1500) -> list[str]:
+    from docx import Document
+    from docx.oxml.ns import qn
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    document = Document(str(path))
+    lines: list[str] = []
+    for child in document.element.body.iterchildren():
+        if child.tag == qn("w:p"):
+            text = Paragraph(child, document).text.strip()
+            if text:
+                lines.append(text)
+        elif child.tag == qn("w:tbl"):
+            for row in Table(child, document).rows:
+                cells = [c.text.strip() for c in row.cells]
+                if any(cells):
+                    lines.append("\t".join(cells))
+    pages = _paginate_lines(lines, block_size)
+    return [sanitize_text(p) for p in pages] if pages else [""]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CSV — delimiter sniffed, paginated into ~block_size-char blocks
+# ─────────────────────────────────────────────────────────────────────────────
+def csv_to_pages(path: str | Path, block_size: int = 1500) -> list[str]:
+    raw = Path(path).read_bytes()
+    text = None
+    for enc in ("utf-8-sig", "utf-8", "cp1250", "latin-1"):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        text = raw.decode("latin-1", errors="replace")
+    try:
+        dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
+    except csv.Error:
+        dialect = csv.excel
+    reader = csv.reader(io.StringIO(text), dialect)
+    lines = ["\t".join(str(c) for c in row) for row in reader if any(str(c).strip() for c in row)]
+    pages = _paginate_lines(lines, block_size)
+    return [sanitize_text(p) for p in pages] if pages else [""]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Optional vision fallback for PDF/image pages still empty after OCR
 # ─────────────────────────────────────────────────────────────────────────────
@@ -143,6 +231,21 @@ def load_document(path: str | Path, settings: Settings | None = None) -> LoadedD
         pages = xlsx_to_pages(path)
         log.info("Loaded Excel %s — %d sheet(s).", path.name, len(pages))
         return LoadedDocument(pages=pages, text_pdf_path=None, was_ocred=False, kind="xlsx")
+
+    if suffix in XLS_SUFFIXES:
+        pages = xls_to_pages(path)
+        log.info("Loaded Excel (legacy) %s — %d sheet(s).", path.name, len(pages))
+        return LoadedDocument(pages=pages, text_pdf_path=None, was_ocred=False, kind="xls")
+
+    if suffix in DOCX_SUFFIXES:
+        pages = docx_to_pages(path, settings.chunk_window_size)
+        log.info("Loaded Word %s — %d block(s).", path.name, len(pages))
+        return LoadedDocument(pages=pages, text_pdf_path=None, was_ocred=False, kind="docx")
+
+    if suffix in CSV_SUFFIXES:
+        pages = csv_to_pages(path, settings.chunk_window_size)
+        log.info("Loaded CSV %s — %d block(s).", path.name, len(pages))
+        return LoadedDocument(pages=pages, text_pdf_path=None, was_ocred=False, kind="csv")
 
     # PDF or image: route through the text-layer-PDF path (OCR when needed).
     text_pdf, was_ocred = ensure_text_pdf(path, settings)

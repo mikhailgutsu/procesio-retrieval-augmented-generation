@@ -223,9 +223,14 @@ def vision_transcribe_page(png_bytes: bytes, settings: Settings | None = None) -
                         {
                             "type": "text",
                             "text": (
-                                "Transcribe ALL text visible in this scanned technical "
-                                "document page verbatim, preserving the reading order. "
-                                "Return only the transcribed text, no commentary."
+                                "This is a page or image from technical substation documentation "
+                                "(a scan, a single-line/monofilar diagram, an equipment photo, or a "
+                                "schematic). First, transcribe ALL visible text verbatim, preserving "
+                                "reading order — labels, bay/cell names, equipment tags, values and "
+                                "units. Then, if it is a diagram or photo, add a short factual "
+                                "description of what it shows (equipment, connections, identifiers) so "
+                                "it can be found by search. Respond in the document's language. "
+                                "Return only the transcription and description, no preamble."
                             ),
                         },
                     ],
