@@ -143,21 +143,39 @@ def ingest_file(
 ingest_pdf = ingest_file
 
 
+def iter_ingestable(directory: str | Path) -> list[Path]:
+    """Return supported files under ``directory`` **recursively** (sorted).
+
+    Case-insensitive by extension; skips unsupported types and macOS archive
+    junk (``__MACOSX/`` entries and ``._`` AppleDouble resource-fork files).
+    """
+    directory = Path(directory)
+    return sorted(
+        p
+        for p in directory.rglob("*")
+        if p.is_file()
+        and is_supported_file(p)
+        and not p.name.startswith("._")
+        and "__MACOSX" not in p.parts
+    )
+
+
 def ingest_directory(
     directory: str | Path | None = None,
     settings: Settings | None = None,
 ) -> list[IngestResult]:
-    """Ingest every supported file (PDF/image/pptx/xlsx) in a directory.
+    """Ingest every supported file (PDF/image/pptx/xlsx) under a directory, recursively.
 
-    Default directory is ``DATA_RAW_DIR``. Selection is case-insensitive and
-    skips unsupported types (e.g. .txt/.docx/.ppt/.xls) silently.
+    Default directory is ``DATA_RAW_DIR``. Subfolders are traversed; selection is
+    case-insensitive and skips unsupported types (e.g. .txt/.docx/.ppt/.xls) and
+    macOS archive junk silently.
     """
     settings = settings or get_settings()
     init_schema(settings)  # idempotent — safe to call before any ingestion
     directory = Path(directory) if directory else settings.raw_dir
-    files = sorted(p for p in directory.iterdir() if p.is_file() and is_supported_file(p))
+    files = iter_ingestable(directory)
     if not files:
-        log.warning("No ingestable files (PDF/image/pptx/xlsx) found in %s", directory)
+        log.warning("No ingestable files (PDF/image/pptx/xlsx) found under %s", directory)
         return []
 
     embedder = get_embedder()
