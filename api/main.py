@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI):
         from src.db import init_schema
 
         init_schema(settings)
-    except Exception as exc:  # keep the app up so /health can report the problem
+    except Exception as exc:  
         log.error("Schema init failed at startup (is the DB up?): %s", exc)
     yield
     from src.db import close_pool

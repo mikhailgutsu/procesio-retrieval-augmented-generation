@@ -138,7 +138,6 @@ def vision(prompt: str, image_png: bytes, settings: Settings | None = None) -> s
             )
             return (resp.choices[0].message.content or "").strip()
 
-        # anthropic (default)
         if not settings.anthropic_api_key:
             log.warning("Vision requested (anthropic) but ANTHROPIC_API_KEY is unset; skipping.")
             return ""

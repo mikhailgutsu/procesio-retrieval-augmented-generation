@@ -19,9 +19,6 @@ from ..logging_config import get_logger
 
 log = get_logger(__name__)
 
-# Image inputs are OCR'd like scanned PDFs. A PDF is text-first; anything here is
-# an image that gets embedded into a 1-page PDF and then OCR'd. The aggregate set
-# of ingestable types (incl. office formats) lives in `document_loader`.
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 
 

@@ -10,15 +10,10 @@ from pathlib import Path
 
 import pymupdf as fitz
 
-# A Unicode TTF is required so Romanian diacritics (ă â î ș ț) are embedded in the
-# text layer. The Base-14 "helv" font only covers Latin-1 and would drop them.
-# Ordered by coverage of Romanian comma-below glyphs (ș U+0219, ț U+021B), which
-# many common fonts (incl. Arial) lack. DejaVu (Linux/Docker) and Helvetica.ttc
-# (macOS) round-trip them correctly.
 FONT_CANDIDATES = [
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",   # Linux / Docker image
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 
     "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-    "/System/Library/Fonts/Helvetica.ttc",               # macOS
+    "/System/Library/Fonts/Helvetica.ttc",
     "/System/Library/Fonts/HelveticaNeue.ttc",
     "/System/Library/Fonts/Geneva.ttf",
 ]
