@@ -1,9 +1,10 @@
 """FastAPI application.
 
 Endpoints:
-  * ``GET  /health``  — liveness + DB connectivity + document/chunk counts.
-  * ``POST /ingest``  — ingest a PDF (multipart upload, or a server-side path).
-  * ``POST /ask``     — answer a question with citations + highlight payload.
+  * ``GET  /health``                     — liveness + DB connectivity + counts.
+  * ``POST /ingest``                     — ingest a PDF (multipart upload / path).
+  * ``POST /ask``                        — answer a question with citations.
+  * ``GET  /documents/{id}/download``    — download the original source file.
 
 Run with:  uvicorn api.main:app --reload
 """
@@ -16,6 +17,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from src.config import get_settings
@@ -71,7 +73,11 @@ class IngestPathRequest(BaseModel):
 # ── Endpoints ────────────────────────────────────────────────────────────────
 @app.get("/")
 def root() -> dict:
-    return {"name": app.title, "version": app.version, "endpoints": ["/health", "/ingest", "/ask"]}
+    return {
+        "name": app.title,
+        "version": app.version,
+        "endpoints": ["/health", "/ingest", "/ask", "/documents/{id}/download"],
+    }
 
 
 @app.get("/health")
@@ -137,3 +143,34 @@ def ask(req: AskRequest) -> dict:
     except RagError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return result.to_dict()
+
+
+@app.get("/documents/{document_id}/download")
+def download_document(document_id: int) -> FileResponse:
+    """Return the original source file for a document (as an attachment).
+
+    Files are served from the raw data directory by their stored basename; if the
+    raw copy is gone we fall back to the recorded source path. Only the basename is
+    used to build the path, so this cannot traverse outside the data directory.
+    """
+    from src.db import connection, get_document
+
+    settings = get_settings()
+    with connection() as conn:
+        doc = get_document(conn, document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Document {document_id} not found.")
+
+    filename = Path(doc["filename"]).name
+    candidate = settings.raw_dir / filename
+    if not candidate.exists() and doc.get("source"):
+        source = Path(str(doc["source"]))
+        if source.is_file():
+            candidate = source
+
+    if not candidate.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"The source file for document {document_id} is no longer available.",
+        )
+    return FileResponse(path=candidate, filename=filename)

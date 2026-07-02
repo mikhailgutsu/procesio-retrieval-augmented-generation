@@ -35,6 +35,14 @@ class Settings(BaseSettings):
 
     # ── Retrieval ─────────────────────────────────────────────────────────────
     top_k: int = 5
+    # Hybrid search: fuse dense vector search with Postgres full-text (keyword)
+    # search so exact rare terms (brand names like "GENEREX") are found too.
+    retrieval_hybrid: bool = True
+    retrieval_candidate_k: int = 40  # per-ranker candidate pool before fusion
+    retrieval_rrf_k: int = 60  # Reciprocal Rank Fusion constant
+    # Drop vector-only hits below this cosine score (0..1). Keyword hits are always
+    # kept. If nothing clears the bar the answer is reported as not found.
+    retrieval_min_score: float = 0.0
 
     # ── LLM (answer extraction + vision) ──────────────────────────────────────
     # Provider for the answer-extraction step: "anthropic" or "openai".

@@ -245,18 +245,39 @@ def csv_to_pages(path: str | Path, block_size: int = 1500) -> list[str]:
 # Optional vision fallback for PDF/image pages still empty after OCR
 # ─────────────────────────────────────────────────────────────────────────────
 def _maybe_vision_fill(
-    text_pdf: Path, pages: list[str], was_ocred: bool, settings: Settings
+    text_pdf: Path,
+    pages: list[str],
+    was_ocred: bool,
+    settings: Settings,
+    *,
+    force_all: bool = False,
 ) -> list[str]:
-    if not (was_ocred and settings.ocr_vision_fallback):
+    """Transcribe pages with the vision model when OCR text is missing or unreliable.
+
+    Normally only pages whose OCR text is below ``scanned_char_threshold`` are sent
+    to the vision model. For standalone images (``force_all=True``) OCR is unreliable
+    even when it returns *some* (garbled) text, so every page is transcribed and the
+    richer of {vision, OCR} is kept.
+    """
+    if not settings.ocr_vision_fallback:
+        return pages
+    if not (was_ocred or force_all):
         return pages
     filled = list(pages)
     for i, text in enumerate(pages):
-        if len(text.strip()) < settings.scanned_char_threshold:
-            log.info("Vision fallback on page %d of %s", i + 1, text_pdf.name)
-            png = render_page_png(text_pdf, i)
-            transcribed = vision_transcribe_page(png, settings)
-            if transcribed:
-                filled[i] = transcribed
+        needs_vision = force_all or len(text.strip()) < settings.scanned_char_threshold
+        if not needs_vision:
+            continue
+        log.info("Vision transcription on page %d of %s", i + 1, text_pdf.name)
+        png = render_page_png(text_pdf, i)
+        transcribed = vision_transcribe_page(png, settings)
+        if transcribed and len(transcribed.strip()) >= len(text.strip()):
+            filled[i] = transcribed
+        elif transcribed and text.strip():
+            # Keep both when OCR had unique content the model may have missed.
+            filled[i] = f"{transcribed}\n\n{text}"
+        elif transcribed:
+            filled[i] = transcribed
     return filled
 
 
@@ -302,8 +323,11 @@ def load_document(path: str | Path, settings: Settings | None = None) -> LoadedD
     # PDF or image: route through the text-layer-PDF path (OCR when needed).
     text_pdf, was_ocred = ensure_text_pdf(path, settings)
     pages = extract_pages_text(text_pdf)
-    pages = _maybe_vision_fill(text_pdf, pages, was_ocred, settings)
-    kind = "image" if suffix in IMAGE_SUFFIXES else "pdf"
+    is_image = suffix in IMAGE_SUFFIXES
+    # For standalone images OCR is unreliable (garbled brand names, diagrams); always
+    # let the vision model read them when the fallback is enabled.
+    pages = _maybe_vision_fill(text_pdf, pages, was_ocred, settings, force_all=is_image)
+    kind = "image" if is_image else "pdf"
     return LoadedDocument(
         pages=pages, text_pdf_path=str(text_pdf), was_ocred=was_ocred, kind=kind
     )

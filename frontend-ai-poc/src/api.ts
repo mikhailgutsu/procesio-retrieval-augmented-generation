@@ -11,6 +11,11 @@ export function apiBase(): string {
   return BASE
 }
 
+/** URL to download the original source file of a document (served as attachment). */
+export function documentDownloadUrl(documentId: number): string {
+  return `${BASE}/documents/${documentId}/download`
+}
+
 async function unwrap<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let detail = `${res.status} ${res.statusText}`

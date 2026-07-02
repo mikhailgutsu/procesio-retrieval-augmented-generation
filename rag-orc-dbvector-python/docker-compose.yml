@@ -24,16 +24,17 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # Pass the whole .env into the container (OpenAI key, vision, retrieval,
+    # ingestion settings…). Without this, only the vars listed under
+    # `environment:` would reach the app and .env settings would be ignored.
+    env_file:
+      - .env
     environment:
+      # Override the DB host for the Docker network (beats the .env value).
       DATABASE_URL: postgresql://rag:rag@db:5432/rag
-      # LLM provider selection (answer extraction). Default to OpenAI gpt-4o-mini.
+      # Sensible defaults if absent from .env.
       LLM_PROVIDER: ${LLM_PROVIDER:-openai}
-      VISION_PROVIDER: ${VISION_PROVIDER:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-8}
-      # Allow the frontend origin(s) through CORS; "*" for the POC.
       CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-*}
     ports:
       - "8000:8000"

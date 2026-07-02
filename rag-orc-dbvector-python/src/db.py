@@ -98,6 +98,11 @@ def _schema_ddl(dim: int) -> str:
 
     CREATE INDEX IF NOT EXISTS chunks_document_id_idx
         ON chunks (document_id);
+
+    -- Full-text index for hybrid (keyword) search. 'simple' config is
+    -- language-agnostic, which suits mixed Romanian/English + brand names.
+    CREATE INDEX IF NOT EXISTS chunks_content_fts_idx
+        ON chunks USING gin (to_tsvector('simple', content));
     """
 
 
@@ -151,6 +156,14 @@ def find_document_by_hash(conn: psycopg.Connection, content_hash: str) -> dict[s
     with conn.cursor(row_factory=dict_row) as cur:
         return cur.execute(
             "SELECT * FROM documents WHERE content_hash = %s", (content_hash,)
+        ).fetchone()
+
+
+def get_document(conn: psycopg.Connection, document_id: int) -> dict[str, Any] | None:
+    """Return the documents row for ``document_id`` (or None), used for downloads."""
+    with conn.cursor(row_factory=dict_row) as cur:
+        return cur.execute(
+            "SELECT * FROM documents WHERE id = %s", (document_id,)
         ).fetchone()
 
 
@@ -212,7 +225,7 @@ def search_chunks(
     `<=>` operator computes cosine *distance*, so similarity = 1 - distance.
     """
     with conn.cursor(row_factory=dict_row) as cur:
-        return cur.execute(
+        rows = cur.execute(
             """
             SELECT
                 c.id            AS chunk_id,
@@ -230,6 +243,83 @@ def search_chunks(
             """,
             (query_embedding, query_embedding, k),
         ).fetchall()
+    for r in rows:
+        r["keyword_hit"] = False
+    return rows
+
+
+def search_chunks_hybrid(
+    conn: psycopg.Connection,
+    query_embedding: Any,
+    query_text: str,
+    k: int,
+    candidate_k: int = 40,
+    rrf_k: int = 60,
+) -> list[dict[str, Any]]:
+    """Hybrid retrieval: fuse dense vector search with full-text keyword search.
+
+    Each ranker contributes its top ``candidate_k`` chunks; results are merged with
+    Reciprocal Rank Fusion (``1/(rrf_k+rank)`` summed across rankers) and the top
+    ``k`` are returned. Each row carries the cosine ``score`` (for thresholding /
+    display) and ``keyword_hit`` (True when the full-text ranker matched it), so
+    exact rare-term matches can be kept regardless of their vector score.
+
+    Falls back to pure vector search when the query has no usable keyword terms.
+    """
+    with conn.cursor(row_factory=dict_row) as cur:
+        rows = cur.execute(
+            """
+            WITH vector_search AS (
+                SELECT c.id,
+                       row_number() OVER (ORDER BY c.embedding <=> %(emb)s) AS rank
+                FROM chunks c
+                ORDER BY c.embedding <=> %(emb)s
+                LIMIT %(cand)s
+            ),
+            keyword_search AS (
+                SELECT c.id,
+                       row_number() OVER (
+                           ORDER BY ts_rank_cd(to_tsvector('simple', c.content), q) DESC
+                       ) AS rank
+                FROM chunks c, websearch_to_tsquery('simple', %(q)s) AS q
+                WHERE to_tsvector('simple', c.content) @@ q
+                LIMIT %(cand)s
+            ),
+            fused AS (
+                SELECT
+                    COALESCE(v.id, k.id) AS id,
+                    COALESCE(1.0 / (%(rrf)s + v.rank), 0.0)
+                        + COALESCE(1.0 / (%(rrf)s + k.rank), 0.0) AS rrf_score,
+                    (k.id IS NOT NULL) AS keyword_hit
+                FROM vector_search v
+                FULL OUTER JOIN keyword_search k ON v.id = k.id
+            )
+            SELECT
+                c.id            AS chunk_id,
+                c.document_id   AS document_id,
+                d.filename      AS filename,
+                d.source        AS source,
+                d.text_pdf_path AS text_pdf_path,
+                c.page_number   AS page_number,
+                c.content       AS content,
+                1 - (c.embedding <=> %(emb)s) AS score,
+                f.keyword_hit   AS keyword_hit,
+                f.rrf_score     AS rrf_score
+            FROM fused f
+            JOIN chunks c    ON c.id = f.id
+            JOIN documents d ON d.id = c.document_id
+            ORDER BY f.rrf_score DESC
+            LIMIT %(k)s
+            """,
+            {
+                "emb": query_embedding,
+                "q": query_text,
+                "cand": candidate_k,
+                "rrf": rrf_k,
+                "k": k,
+            },
+        ).fetchall()
+    return rows
 
 
 def counts(conn: psycopg.Connection) -> dict[str, int]:
