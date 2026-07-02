@@ -10,10 +10,12 @@ Run with:  uvicorn api.main:app --reload
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from src.config import get_settings
@@ -41,6 +43,18 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="RAG Technical Documentation Assistant", version="0.1.0", lifespan=lifespan)
+
+# ── CORS ─────────────────────────────────────────────────────────────────────
+# Allow the browser frontend (Vite dev server / built SPA) to call this API.
+# Set CORS_ALLOW_ORIGINS to a comma-separated list to restrict; defaults to "*".
+_cors_origins = [o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins or ["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────────

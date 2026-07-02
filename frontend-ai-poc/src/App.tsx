@@ -1,122 +1,159 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
+import { useEffect, useRef, useState } from 'react'
 import './App.css'
+import { apiBase, ask, ingest } from './api.ts'
+import type { ChatMessage } from './types.ts'
+import { HealthBadge } from './components/HealthBadge.tsx'
+import { Composer } from './components/Composer.tsx'
+import { Message } from './components/Message.tsx'
 
-function App() {
-  const [count, setCount] = useState(0)
+const EXAMPLES = [
+  'What does this document cover?',
+  'Summarize the main requirements.',
+  'Which page mentions the configuration steps?',
+]
 
-  return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+function newId(): string {
+  return crypto.randomUUID()
 }
 
-export default App
+export default function App() {
+  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [busy, setBusy] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const fileInput = useRef<HTMLInputElement>(null)
+  const scroller = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: 'smooth' })
+  }, [messages])
+
+  const send = async (text: string) => {
+    const pendingId = newId()
+    setMessages((prev) => [
+      ...prev,
+      { id: newId(), role: 'user', text },
+      { id: pendingId, role: 'assistant', text: '', pending: true },
+    ])
+    setBusy(true)
+    try {
+      const res = await ask(text)
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === pendingId
+            ? {
+                ...m,
+                pending: false,
+                text: res.answer,
+                answerable: res.answerable,
+                citations: res.citations,
+                retrieved: res.retrieved,
+                highlights: res.highlights,
+              }
+            : m,
+        ),
+      )
+    } catch (err) {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === pendingId
+            ? { ...m, pending: false, error: true, text: `Request failed: ${(err as Error).message}` }
+            : m,
+        ),
+      )
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const upload = async (file: File) => {
+    setUploading(true)
+    setMessages((prev) => [
+      ...prev,
+      { id: newId(), role: 'user', text: `📎 Uploading ${file.name}…` },
+    ])
+    try {
+      const res = await ingest(file)
+      const summary =
+        res.status === 'skipped'
+          ? `Already ingested "${res.filename ?? file.name}" (skipped duplicate).`
+          : `Ingested "${res.filename ?? file.name}" — ${res.pages ?? '?'} pages, ${res.chunks ?? '?'} chunks. Ask me about it!`
+      setMessages((prev) => [...prev, { id: newId(), role: 'assistant', text: summary, answerable: true }])
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev,
+        { id: newId(), role: 'assistant', error: true, text: `Upload failed: ${(err as Error).message}` },
+      ])
+    } finally {
+      setUploading(false)
+      if (fileInput.current) fileInput.current.value = ''
+    }
+  }
+
+  return (
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand__logo">◆</span>
+          <div>
+            <h1 className="brand__title">RAG Assistant</h1>
+            <p className="brand__subtitle">Chat over your ingested documents</p>
+          </div>
+        </div>
+        <div className="topbar__right">
+          <HealthBadge />
+          <button
+            type="button"
+            className="btn btn--ghost"
+            disabled={uploading}
+            onClick={() => fileInput.current?.click()}
+          >
+            {uploading ? 'Uploading…' : '＋ Upload doc'}
+          </button>
+          <input
+            ref={fileInput}
+            type="file"
+            hidden
+            accept=".pdf,.png,.jpg,.jpeg,.tiff,.bmp,.webp,.pptx,.xlsx,.xlsm,.xls,.docx,.doc,.csv"
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              if (f) upload(f)
+            }}
+          />
+        </div>
+      </header>
+
+      <main className="chat" ref={scroller}>
+        {messages.length === 0 ? (
+          <div className="welcome">
+            <h2>Ask the documentation</h2>
+            <p>
+              Questions run the full RAG flow on the backend: your text is embedded, matched against
+              the vector index, and answered by the LLM with page-level citations.
+            </p>
+            <div className="welcome__examples">
+              {EXAMPLES.map((q) => (
+                <button key={q} type="button" className="example" onClick={() => send(q)}>
+                  {q}
+                </button>
+              ))}
+            </div>
+            <p className="welcome__hint">
+              No documents yet? Use <strong>＋ Upload doc</strong> above to ingest a PDF first.
+            </p>
+          </div>
+        ) : (
+          <div className="thread">
+            {messages.map((m) => (
+              <Message key={m.id} msg={m} />
+            ))}
+          </div>
+        )}
+      </main>
+
+      <footer className="footer">
+        <Composer disabled={busy} onSend={send} />
+        <p className="footer__api">connected to {apiBase()}</p>
+      </footer>
+    </div>
+  )
+}

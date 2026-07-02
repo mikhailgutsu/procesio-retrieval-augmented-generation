@@ -26,13 +26,23 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://rag:rag@db:5432/rag
+      # LLM provider selection (answer extraction). Default to OpenAI gpt-4o-mini.
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      VISION_PROVIDER: ${VISION_PROVIDER:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-8}
+      # Allow the frontend origin(s) through CORS; "*" for the POC.
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-*}
     ports:
       - "8000:8000"
     volumes:
       - ./data:/app/data
+      # Persist the embedding model across rebuilds (avoids re-downloading it).
+      - hf_cache:/root/.cache/huggingface
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
 
 volumes:
   pgdata:
+  hf_cache:
