@@ -84,12 +84,44 @@ def answer_question(
             ),
         )
 
-    citations = [
-        Citation(c.document_id, c.filename, c.page_number, round(c.score, 4)) for c in chunks
-    ]
+    # Relevance gate: keep vector hits at/above the floor, but always keep exact
+    # keyword matches (rare brand names, IDs) even when their vector score is low.
+    # If nothing clears the bar, don't answer from irrelevant pages — say so.
+    min_score = settings.retrieval_min_score
+    if min_score > 0:
+        kept = [c for c in chunks if c.keyword_hit or c.score >= min_score]
+        if len(kept) != len(chunks):
+            log.info(
+                "Relevance gate kept %d/%d chunk(s) (min_score=%.2f, top=%.3f).",
+                len(kept), len(chunks), min_score, chunks[0].score,
+            )
+        if not kept:
+            return AnswerResult(
+                question=question,
+                answerable=False,
+                answer=(
+                    "I couldn't find sufficiently relevant information in the ingested "
+                    "documents to answer this. Try rephrasing, or ingest the relevant file."
+                ),
+            )
+        chunks = kept
 
     # 5. Extract verbatim answering spans with the LLM.
     extraction = extract_answer(question, chunks, settings=settings, client=client)
+
+    # If the model couldn't ground an answer, don't present the retrieved pages as
+    # sources — returning them made irrelevant files look like citations.
+    if not extraction.answerable:
+        return AnswerResult(
+            question=question, answerable=False, answer=extraction.answer, retrieved=chunks
+        )
+
+    # Citations = the pages the model actually cited (fall back to all retrieved).
+    cited = {(s.document_id, s.page_number) for s in extraction.spans}
+    used = [c for c in chunks if (c.document_id, c.page_number) in cited] or chunks
+    citations = [
+        Citation(c.document_id, c.filename, c.page_number, round(c.score, 4)) for c in used
+    ]
 
     # 6. Highlight (UI payload + optional PDF annotation).
     highlights: list[Highlight] = []
@@ -102,5 +134,5 @@ def answer_question(
         answer=extraction.answer,
         citations=citations,
         highlights=highlights,
-        retrieved=chunks,
+        retrieved=used,
     )

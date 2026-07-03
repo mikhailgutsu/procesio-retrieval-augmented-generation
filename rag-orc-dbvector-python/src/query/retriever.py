@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..config import Settings, get_settings
-from ..db import connection, search_chunks
+from ..db import connection, search_chunks, search_chunks_hybrid
 from ..ingest.embedder import Embedder, get_embedder
 from ..logging_config import get_logger
 
@@ -26,6 +26,7 @@ class RetrievedChunk:
     page_number: int
     content: str
     score: float
+    keyword_hit: bool = False
 
 
 def retrieve(
@@ -34,14 +35,24 @@ def retrieve(
     settings: Settings | None = None,
     embedder: Embedder | None = None,
 ) -> list[RetrievedChunk]:
-    """Return the top-k chunks most similar to ``question`` (highest score first)."""
+    """Return the top-k chunks for ``question`` (hybrid keyword+vector by default)."""
     settings = settings or get_settings()
     embedder = embedder or get_embedder()
     k = k or settings.top_k
 
     query_vec = embedder.encode_query(question)
     with connection(settings) as conn:
-        rows = search_chunks(conn, query_vec, k)
+        if settings.retrieval_hybrid:
+            rows = search_chunks_hybrid(
+                conn,
+                query_vec,
+                question,
+                k,
+                candidate_k=settings.retrieval_candidate_k,
+                rrf_k=settings.retrieval_rrf_k,
+            )
+        else:
+            rows = search_chunks(conn, query_vec, k)
 
     hits = [
         RetrievedChunk(
@@ -53,13 +64,15 @@ def retrieve(
             page_number=r["page_number"],
             content=r["content"],
             score=float(r["score"]),
+            keyword_hit=bool(r.get("keyword_hit", False)),
         )
         for r in rows
     ]
     log.info(
-        "Retrieved %d chunk(s) for question %r (top score=%.3f).",
+        "Retrieved %d chunk(s) for question %r (top score=%.3f, %d keyword hit(s)).",
         len(hits),
         question[:60],
         hits[0].score if hits else float("nan"),
+        sum(1 for h in hits if h.keyword_hit),
     )
     return hits

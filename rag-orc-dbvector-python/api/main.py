@@ -1,19 +1,23 @@
 """FastAPI application.
 
 Endpoints:
-  * ``GET  /health``  — liveness + DB connectivity + document/chunk counts.
-  * ``POST /ingest``  — ingest a PDF (multipart upload, or a server-side path).
-  * ``POST /ask``     — answer a question with citations + highlight payload.
+  * ``GET  /health``                     — liveness + DB connectivity + counts.
+  * ``POST /ingest``                     — ingest a PDF (multipart upload / path).
+  * ``POST /ask``                        — answer a question with citations.
+  * ``GET  /documents/{id}/download``    — download the original source file.
 
 Run with:  uvicorn api.main:app --reload
 """
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from src.config import get_settings
@@ -42,6 +46,18 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="RAG Technical Documentation Assistant", version="0.1.0", lifespan=lifespan)
 
+# ── CORS ─────────────────────────────────────────────────────────────────────
+# Allow the browser frontend (Vite dev server / built SPA) to call this API.
+# Set CORS_ALLOW_ORIGINS to a comma-separated list to restrict; defaults to "*".
+_cors_origins = [o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins or ["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 # ── Schemas ──────────────────────────────────────────────────────────────────
 class AskRequest(BaseModel):
@@ -57,7 +73,17 @@ class IngestPathRequest(BaseModel):
 # ── Endpoints ────────────────────────────────────────────────────────────────
 @app.get("/")
 def root() -> dict:
-    return {"name": app.title, "version": app.version, "endpoints": ["/health", "/ingest", "/ask"]}
+    return {
+        "name": app.title,
+        "version": app.version,
+        "endpoints": [
+            "/health",
+            "/ingest",
+            "/ask",
+            "/documents/{id}/download",
+            "/documents/{id}/text",
+        ],
+    }
 
 
 @app.get("/health")
@@ -123,3 +149,66 @@ def ask(req: AskRequest) -> dict:
     except RagError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return result.to_dict()
+
+
+def _resolve_document_file(document_id: int) -> tuple[Path, str]:
+    """Return (path, filename) of a document's original file, or raise 404."""
+    from src.db import connection, get_document
+
+    settings = get_settings()
+    with connection() as conn:
+        doc = get_document(conn, document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Document {document_id} not found.")
+
+    filename = Path(doc["filename"]).name
+    candidate = settings.raw_dir / filename
+    if not candidate.exists() and doc.get("source"):
+        source = Path(str(doc["source"]))
+        if source.is_file():
+            candidate = source
+    if not candidate.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"The source file for document {document_id} is no longer available.",
+        )
+    return candidate, filename
+
+
+@app.get("/documents/{document_id}/download")
+def download_document(document_id: int, inline: bool = False) -> FileResponse:
+    """Return the original source file for a document.
+
+    ``inline=true`` serves it with an inline disposition so browsers can render it
+    in a preview (images, PDFs); otherwise it is sent as a download attachment. The
+    path is built from the stored basename only, so it cannot traverse outside the
+    data directory.
+    """
+    candidate, filename = _resolve_document_file(document_id)
+    disposition = "inline" if inline else "attachment"
+    return FileResponse(path=candidate, filename=filename, content_disposition_type=disposition)
+
+
+@app.get("/documents/{document_id}/text")
+def document_text(document_id: int) -> dict:
+    """Return the extracted text the RAG pipeline indexed for a document.
+
+    This is what the system actually "sees" (OCR / vision transcription / native
+    text), used to preview non-renderable files (Office, CSV) in the UI.
+    """
+    from src.db import connection, get_document, get_document_chunks
+
+    with connection() as conn:
+        doc = get_document(conn, document_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail=f"Document {document_id} not found.")
+        chunks = get_document_chunks(conn, document_id)
+
+    pages = [{"page_number": c["page_number"], "content": c["content"]} for c in chunks]
+    return {
+        "document_id": document_id,
+        "filename": doc["filename"],
+        "num_pages": doc.get("num_pages"),
+        "pages": pages,
+        "text": "\n\n".join(c["content"] for c in chunks),
+    }

@@ -48,7 +48,7 @@ def complete_json(
     settings = settings or get_settings()
     provider = (settings.llm_provider or "anthropic").lower()
     if provider == "openai":
-        return _openai_complete_json(system, user, settings, client)
+        return _openai_complete_json(system, user, settings, json_schema, client)
     return _anthropic_complete_json(system, user, settings, json_schema, client)
 
 
@@ -87,23 +87,53 @@ def _anthropic_complete_json(system, user, settings, json_schema, client):
     return text
 
 
-def _openai_complete_json(system, user, settings, client):
+def _openai_complete_json(system, user, settings, json_schema, client):
     if client is None:
         if not settings.openai_api_key:
             raise ConfigError(
                 "OPENAI_API_KEY is not set — required for extraction (LLM_PROVIDER=openai)."
             )
         client = _openai_client(settings)
-    resp = client.chat.completions.create(
-        model=settings.openai_model,
-        max_tokens=settings.llm_max_tokens,
-        messages=[
-            {"role": "system", "content": system + "\n\nRespond with ONLY a JSON object."},
-            {"role": "user", "content": user},
-        ],
-        response_format={"type": "json_object"},
-    )
-    text = resp.choices[0].message.content or ""
+
+    def _call(response_format, sys_msg):
+        return client.chat.completions.create(
+            model=settings.openai_model,
+            max_tokens=settings.llm_max_tokens,
+            messages=[
+                {"role": "system", "content": sys_msg},
+                {"role": "user", "content": user},
+            ],
+            response_format=response_format,
+        )
+
+    try:
+        if json_schema is not None:
+            # Structured Outputs: constrain the model to the exact schema (gpt-4o-mini
+            # and newer support strict json_schema; requires openai>=1.40).
+            resp = _call(
+                {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "extraction_result",
+                        "schema": json_schema,
+                        "strict": True,
+                    },
+                },
+                system,
+            )
+        else:
+            resp = _call({"type": "json_object"}, system + "\n\nRespond with ONLY a JSON object.")
+    except Exception as exc:  # older SDK/model without json_schema → plain JSON fallback
+        log.warning("OpenAI structured outputs unavailable (%s); plain JSON fallback.", exc)
+        resp = _call(
+            {"type": "json_object"},
+            system + "\n\nRespond with ONLY a JSON object matching the required fields.",
+        )
+
+    message = resp.choices[0].message
+    if getattr(message, "refusal", None):
+        raise ExtractionError(f"The model refused to answer this request: {message.refusal}")
+    text = message.content or ""
     if not text.strip():
         raise ExtractionError("The model returned no text output.")
     return text
