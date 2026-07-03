@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { documentDownloadUrl } from '../api.ts'
 import type { ChatMessage, Citation } from '../types.ts'
+import { PreviewModal } from './PreviewModal.tsx'
 
 /** Renders one transcript entry: a user bubble, or an assistant answer + sources. */
 export function Message({ msg }: { msg: ChatMessage }) {
@@ -74,6 +75,7 @@ function uniqueFiles(citations: Citation[]): FileRef[] {
 
 function Sources({ msg }: { msg: ChatMessage }) {
   const [open, setOpen] = useState(false)
+  const [preview, setPreview] = useState<FileRef | null>(null)
   const citations = msg.citations ?? []
   const retrieved = msg.retrieved ?? []
   const files = uniqueFiles(citations)
@@ -97,18 +99,36 @@ function Sources({ msg }: { msg: ChatMessage }) {
                     page{f.pages.length === 1 ? '' : 's'} {f.pages.join(', ')} · {f.score.toFixed(3)}
                   </span>
                 </div>
-                <a
-                  className="file__dl"
-                  href={documentDownloadUrl(f.document_id)}
-                  download={f.filename}
-                  title={`Download ${f.filename}`}
-                >
-                  ⬇ Download
-                </a>
+                <div className="file__actions">
+                  <button
+                    type="button"
+                    className="file__btn"
+                    onClick={() => setPreview(f)}
+                    title={`Preview ${f.filename}`}
+                  >
+                    👁 Preview
+                  </button>
+                  <a
+                    className="file__dl"
+                    href={documentDownloadUrl(f.document_id)}
+                    download={f.filename}
+                    title={`Download ${f.filename}`}
+                  >
+                    ⬇ Download
+                  </a>
+                </div>
               </li>
             ))}
           </ul>
         </div>
+      )}
+
+      {preview && (
+        <PreviewModal
+          documentId={preview.document_id}
+          filename={preview.filename}
+          onClose={() => setPreview(null)}
+        />
       )}
 
       {retrieved.length > 0 && (

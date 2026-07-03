@@ -76,7 +76,13 @@ def root() -> dict:
     return {
         "name": app.title,
         "version": app.version,
-        "endpoints": ["/health", "/ingest", "/ask", "/documents/{id}/download"],
+        "endpoints": [
+            "/health",
+            "/ingest",
+            "/ask",
+            "/documents/{id}/download",
+            "/documents/{id}/text",
+        ],
     }
 
 
@@ -145,14 +151,8 @@ def ask(req: AskRequest) -> dict:
     return result.to_dict()
 
 
-@app.get("/documents/{document_id}/download")
-def download_document(document_id: int) -> FileResponse:
-    """Return the original source file for a document (as an attachment).
-
-    Files are served from the raw data directory by their stored basename; if the
-    raw copy is gone we fall back to the recorded source path. Only the basename is
-    used to build the path, so this cannot traverse outside the data directory.
-    """
+def _resolve_document_file(document_id: int) -> tuple[Path, str]:
+    """Return (path, filename) of a document's original file, or raise 404."""
     from src.db import connection, get_document
 
     settings = get_settings()
@@ -167,10 +167,48 @@ def download_document(document_id: int) -> FileResponse:
         source = Path(str(doc["source"]))
         if source.is_file():
             candidate = source
-
     if not candidate.is_file():
         raise HTTPException(
             status_code=404,
             detail=f"The source file for document {document_id} is no longer available.",
         )
-    return FileResponse(path=candidate, filename=filename)
+    return candidate, filename
+
+
+@app.get("/documents/{document_id}/download")
+def download_document(document_id: int, inline: bool = False) -> FileResponse:
+    """Return the original source file for a document.
+
+    ``inline=true`` serves it with an inline disposition so browsers can render it
+    in a preview (images, PDFs); otherwise it is sent as a download attachment. The
+    path is built from the stored basename only, so it cannot traverse outside the
+    data directory.
+    """
+    candidate, filename = _resolve_document_file(document_id)
+    disposition = "inline" if inline else "attachment"
+    return FileResponse(path=candidate, filename=filename, content_disposition_type=disposition)
+
+
+@app.get("/documents/{document_id}/text")
+def document_text(document_id: int) -> dict:
+    """Return the extracted text the RAG pipeline indexed for a document.
+
+    This is what the system actually "sees" (OCR / vision transcription / native
+    text), used to preview non-renderable files (Office, CSV) in the UI.
+    """
+    from src.db import connection, get_document, get_document_chunks
+
+    with connection() as conn:
+        doc = get_document(conn, document_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail=f"Document {document_id} not found.")
+        chunks = get_document_chunks(conn, document_id)
+
+    pages = [{"page_number": c["page_number"], "content": c["content"]} for c in chunks]
+    return {
+        "document_id": document_id,
+        "filename": doc["filename"],
+        "num_pages": doc.get("num_pages"),
+        "pages": pages,
+        "text": "\n\n".join(c["content"] for c in chunks),
+    }

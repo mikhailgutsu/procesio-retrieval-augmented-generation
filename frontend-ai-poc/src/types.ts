@@ -57,6 +57,15 @@ export interface IngestResponse {
   [key: string]: unknown
 }
 
+/** Response of `GET /documents/{id}/text` — the text the RAG pipeline indexed. */
+export interface DocumentText {
+  document_id: number
+  filename: string
+  num_pages: number | null
+  pages: { page_number: number; content: string }[]
+  text: string
+}
+
 export type Role = 'user' | 'assistant'
 
 /** A single message rendered in the chat transcript. */

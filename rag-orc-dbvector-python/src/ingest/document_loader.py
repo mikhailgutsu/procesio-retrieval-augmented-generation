@@ -27,6 +27,7 @@ from .pdf_loader import (
     IMAGE_SUFFIXES,
     ensure_text_pdf,
     extract_pages_text,
+    image_to_pdf,
     render_page_png,
     sanitize_text,
     vision_transcribe_page,
@@ -321,9 +322,17 @@ def load_document(path: str | Path, settings: Settings | None = None) -> LoadedD
         return LoadedDocument(pages=pages, text_pdf_path=None, was_ocred=False, kind="csv")
 
     # PDF or image: route through the text-layer-PDF path (OCR when needed).
-    text_pdf, was_ocred = ensure_text_pdf(path, settings)
-    pages = extract_pages_text(text_pdf)
     is_image = suffix in IMAGE_SUFFIXES
+    if is_image and settings.ocr_vision_fallback:
+        # Images are transcribed by the vision model anyway, and OCR on large
+        # photos is slow/unreliable (tesseract often times out). Skip OCR and hand
+        # the image straight to vision — much faster and far more accurate.
+        text_pdf = image_to_pdf(path, settings)
+        was_ocred = False
+        pages = extract_pages_text(text_pdf)
+    else:
+        text_pdf, was_ocred = ensure_text_pdf(path, settings)
+        pages = extract_pages_text(text_pdf)
     # For standalone images OCR is unreliable (garbled brand names, diagrams); always
     # let the vision model read them when the fallback is enabled.
     pages = _maybe_vision_fill(text_pdf, pages, was_ocred, settings, force_all=is_image)

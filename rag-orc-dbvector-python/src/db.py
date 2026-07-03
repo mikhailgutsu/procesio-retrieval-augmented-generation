@@ -167,6 +167,24 @@ def get_document(conn: psycopg.Connection, document_id: int) -> dict[str, Any] |
         ).fetchone()
 
 
+def get_document_chunks(conn: psycopg.Connection, document_id: int) -> list[dict[str, Any]]:
+    """Return the stored (page_number, content) chunks for a document, in order.
+
+    This is the text the RAG pipeline actually indexed (OCR / vision / native
+    extraction) — used to preview what the system "sees" for a document.
+    """
+    with conn.cursor(row_factory=dict_row) as cur:
+        return cur.execute(
+            """
+            SELECT page_number, content
+            FROM chunks
+            WHERE document_id = %s
+            ORDER BY page_number, id
+            """,
+            (document_id,),
+        ).fetchall()
+
+
 def delete_document(conn: psycopg.Connection, document_id: int) -> None:
     conn.execute("DELETE FROM documents WHERE id = %s", (document_id,))
 

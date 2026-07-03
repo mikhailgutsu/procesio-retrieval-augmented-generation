@@ -3,7 +3,7 @@
 // The base URL is read from VITE_API_BASE (see .env.example) and defaults to the
 // Docker-exposed backend at http://localhost:8000. CORS is enabled server-side.
 
-import type { AskResponse, HealthResponse, IngestResponse } from './types.ts'
+import type { AskResponse, DocumentText, HealthResponse, IngestResponse } from './types.ts'
 
 const BASE = (import.meta.env.VITE_API_BASE ?? 'http://localhost:8000').replace(/\/+$/, '')
 
@@ -14,6 +14,23 @@ export function apiBase(): string {
 /** URL to download the original source file of a document (served as attachment). */
 export function documentDownloadUrl(documentId: number): string {
   return `${BASE}/documents/${documentId}/download`
+}
+
+/**
+ * Fetch a document's original file and return an object URL for inline preview
+ * (image / PDF). Using a blob URL means the browser renders it regardless of the
+ * server's content-disposition. Caller must URL.revokeObjectURL when done.
+ */
+export async function fetchDocumentObjectUrl(documentId: number): Promise<string> {
+  const res = await fetch(`${BASE}/documents/${documentId}/download?inline=true`)
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  return URL.createObjectURL(await res.blob())
+}
+
+/** The text the RAG pipeline extracted/indexed for a document (OCR / vision / native). */
+export async function documentText(documentId: number): Promise<DocumentText> {
+  const res = await fetch(`${BASE}/documents/${documentId}/text`)
+  return unwrap<DocumentText>(res)
 }
 
 async function unwrap<T>(res: Response): Promise<T> {
